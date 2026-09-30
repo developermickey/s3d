@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Curved Virtual Tour - Three.js + GSAP</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background-color: #030305; color: #fff; overflow-x: hidden; font-family: sans-serif; }
+
+    /* WebGL Fixed Canvas */
+    #webgl-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 1;
+    }
+
+    /* Track height for GSAP Scrolling */
+    .scroll-track {
+      height: 800vh;
+      position: relative;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    /* UI Instruction */
+    .ui-layer {
+      position: fixed;
+      bottom: 25px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      color: rgba(255, 255, 255, 0.8);
+      font-size: 13px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      background: rgba(0, 0, 0, 0.6);
+      padding: 10px 20px;
+      border-radius: 20px;
+      backdrop-filter: blur(5px);
+      pointer-events: none;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="webgl-canvas"></canvas>
+  <div class="ui-layer">Scroll Down to Navigate &bull; Click Image to Open Page</div>
+  <div class="scroll-track"></div>
+
+  <!-- CDN Scripts -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+
+  <script>
+    gsap.registerPlugin(ScrollTrigger);
+
+    // 1. SCENE SETUP
+    const canvas = document.getElementById('webgl-canvas');
+    const scene = new THREE.Scene();
+    
+    // Background Cinematic Fog
+    scene.fog = new THREE.FogExp2(0x030305, 0.025);
+
+    const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 0, 10);
+
+    const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    // 2. LIGHTING SETUP
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
+    scene.add(ambientLight);
+
+    const blueLight = new THREE.PointLight(0x0066ff, 3, 40);
+    blueLight.position.set(-5, 5, -10);
+    scene.add(blueLight);
+
+    const redLight = new THREE.PointLight(0xff0055, 3, 40);
+    redLight.position.set(5, -2, -25);
+    scene.add(redLight);
+
+    // 3. IMAGES & FRAMES DATA (Unsplash High-Quality CDN Images)
+    const itemsData = [
+      { 
+        img: 'https://images.unsplash.com/photo-1617814076367-b759c7d7e738?auto=format&fit=crop&w=1200&q=80', 
+        url: 'https://unsplash.com', 
+        pos: [-3.5, 0, -5],
+        rotY: 0.25 
+      },
+      { 
+        img: 'https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&w=1200&q=80', 
+        url: 'https://google.com', 
+        pos: [3.8, 0.5, -20],
+        rotY: -0.3 
+      },
+      { 
+        img: 'https://images.unsplash.com/photo-1542282088-72c9c27ed0cd?auto=format&fit=crop&w=1200&q=80', 
+        url: 'https://github.com', 
+        pos: [-3.8, -0.5, -35],
+        rotY: 0.3 
+      },
+      { 
+        img: 'https://images.unsplash.com/photo-1552519507-da3b142c6e3d?auto=format&fit=crop&w=1200&q=80', 
+        url: 'https://threejs.org', 
+        pos: [3.5, 0, -50],
+        rotY: -0.2 
+      }
+    ];
+
+    const textureLoader = new THREE.TextureLoader();
+    const interactiveMeshList = [];
+
+    // Helper to create frames + images
+    itemsData.forEach((data) => {
+      const group = new THREE.Group();
+
+      // Image Plane (16:9 Aspect Ratio)
+      const texture = textureLoader.load(data.img);
+      const imgGeo = new THREE.PlaneGeometry(4, 2.25); 
+      const imgMat = new THREE.MeshStandardMaterial({ 
+        map: texture, 
+        side: THREE.DoubleSide,
+        roughness: 0.3 
+      });
+      const imgMesh = new THREE.Mesh(imgGeo, imgMat);
+
+      // Black Frame Border around Image
+      const borderGeo = new THREE.PlaneGeometry(4.2, 2.45);
+      const borderMat = new THREE.MeshBasicMaterial({ color: 0x111115, side: THREE.DoubleSide });
+      const borderMesh = new THREE.Mesh(borderGeo, borderMat);
+      borderMesh.position.z = -0.01;
+
+      group.add(imgMesh);
+      group.add(borderMesh);
+
+      // Positioning & Rotation
+      group.position.set(...data.pos);
+      group.rotation.y = data.rotY;
+
+      // Attach data to image mesh for Raycasting
+      imgMesh.userData = { targetUrl: data.url, parentGroup: group };
+
+      scene.add(group);
+      interactiveMeshList.push(imgMesh);
+    });
+
+    // 4. GSAP CURVED SCROLL PATH (Left/Right + Forward Movement)
+    const cameraTL = gsap.timeline({
+      scrollTrigger: {
+        trigger: ".scroll-track",
+        start: "top top",
+        end: "bottom bottom",
+        scrub: 1.2
+      }
+    });
+
+    // Waypoints for smooth Left-Right Curved Movement
+    cameraTL
+      .to(camera.position, { x: -1.5, y: 0.2, z: -10, duration: 2 })
+      .to(camera.position, { x: 2, y: -0.2, z: -25, duration: 2 })
+      .to(camera.position, { x: -2, y: 0, z: -40, duration: 2 })
+      .to(camera.position, { x: 0, y: 0, z: -58, duration: 2 });
+
+    // Dynamic Camera Rotation (Pan look effect)
+    gsap.to(camera.rotation, {
+      y: Math.PI * 0.05,
+      scrollTrigger: {
+        trigger: ".scroll-track",
+        start: "top top",
+        end: "bottom bottom",
+        scrub: 1.5
+      }
+    });
+
+    // 5. RAYCASTER (Hover & Click Logic)
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    let hoveredMesh = null;
+
+    window.addEventListener('mousemove', (e) => {
+      mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(interactiveMeshList);
+
+      if (intersects.length > 0) {
+        document.body.style.cursor = 'pointer';
+        const hitMesh = intersects[0].object;
+
+        if (hoveredMesh !== hitMesh) {
+          if (hoveredMesh) {
+            gsap.to(hoveredMesh.userData.parentGroup.scale, { x: 1, y: 1, z: 1, duration: 0.3 });
+          }
+          hoveredMesh = hitMesh;
+          gsap.to(hoveredMesh.userData.parentGroup.scale, { x: 1.08, y: 1.08, z: 1.08, duration: 0.3 });
+        }
+      } else {
+        document.body.style.cursor = 'default';
+        if (hoveredMesh) {
+          gsap.to(hoveredMesh.userData.parentGroup.scale, { x: 1, y: 1, z: 1, duration: 0.3 });
+          hoveredMesh = null;
+        }
+      }
+    });
+
+    // Click Redirection
+    window.addEventListener('click', () => {
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(interactiveMeshList);
+
+      if (intersects.length > 0) {
+        const url = intersects[0].object.userData.targetUrl;
+        const group = intersects[0].object.userData.parentGroup;
+
+        // Click Scale Pulse Animation before opening link
+        gsap.to(group.scale, {
+          x: 1.2,
+          y: 1.2,
+          duration: 0.2,
+          yoyo: true,
+          repeat: 1,
+          onComplete: () => {
+            window.location.href = url;
+          }
+        });
+      }
+    });
+
+    // 6. RENDER LOOP
+    function animate() {
+      requestAnimationFrame(animate);
+      
+      // Subtle float motion
+      interactiveMeshList.forEach((mesh, index) => {
+        mesh.userData.parentGroup.position.y += Math.sin(Date.now() * 0.0015 + index) * 0.001;
+      });
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // Resize Handler
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
